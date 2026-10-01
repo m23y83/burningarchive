@@ -1,8 +1,8 @@
 # Credits & Third-Party Notices
 
 BurningArchive is a small graphical front end. Everything that actually talks to
-the drive and builds the disc filesystem is done by **cdrtools**, which the app
-runs as separate command-line programs.
+the drive and builds the disc filesystem is done by **cdrtools** and
+**dvd+rw-tools**, which the app runs as separate command-line programs.
 
 ## cdrtools — Jörg Schilling
 
@@ -31,10 +31,21 @@ or binaries, and the app does not link against any cdrtools library. It starts t
 Homebrew (`brew install cdrtools`). The cdrtools licenses therefore cover those
 programs, not this app. BurningArchive's own code is MIT-licensed (see `LICENSE`).
 
+## dvd+rw-tools — Andy Polyakov
+
+- `growisofs`: writes sessions that leave a BD-R open (appendable), since cdrecord's
+  BD-R driver always finalizes the disc
+
+- Homepage: <http://fy.chalmers.se/~appro/linux/DVD+RW/>
+- License: GPL-2.0
+
+**Not bundled** either. The app starts the `growisofs` program the user installed
+separately (`brew install dvd+rw-tools`).
+
 ## Homebrew
 
-cdrtools for macOS is packaged by the Homebrew project:
-<https://formulae.brew.sh/formula/cdrtools> (BSD-2-Clause for the formula).
+cdrtools and dvd+rw-tools for macOS are packaged by the Homebrew project:
+<https://formulae.brew.sh/formula/cdrtools>, <https://formulae.brew.sh/formula/dvd+rw-tools> (BSD-2-Clause for the formula).
 
 ## Apple frameworks
 
