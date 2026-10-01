@@ -112,3 +112,35 @@ Remaining writable size:            48876544
     let closed = Commands.cdrecordBurnArgs(dev: "2,0,0", sectors: 1, options: BurnOptions(volumeLabel: "X", closeDisc: true))
     #expect(!closed.contains("-multi"))
 }
+
+@Test func growisofsArgsKeepDiscAppendable() {
+    #expect(Commands.growisofsArgs(device: "/dev/rdisk6", msinfo: nil)
+            == ["-use-the-force-luke=spare:none", "-Z", "/dev/rdisk6=/dev/fd/0"])
+    #expect(Commands.growisofsArgs(device: "/dev/rdisk6", msinfo: "0,1024")
+            == ["-use-the-force-luke=spare:none", "-C", "0,1024", "-M", "/dev/rdisk6=/dev/fd/0"])
+}
+
+@Test func writerSelection() {
+    #expect(Commands.usesGrowisofs(mediaType: "BD-R sequential recording", closeDisc: false))
+    #expect(!Commands.usesGrowisofs(mediaType: "BD-R sequential recording", closeDisc: true))
+    #expect(!Commands.usesGrowisofs(mediaType: "CD-R", closeDisc: false))
+}
+
+@Test func parsesGrowisofsProgress() {
+    #expect(Parsers.growisofsProgress("  123731968/25025314816 ( 0.5%) @2.7x, remaining 16:23 RBU 100.0% UBU  99.7%") == 123731968)
+    #expect(Parsers.growisofsProgress("/dev/rdisk6: closing session") == nil)
+}
+
+@Test func parsesDrutil() {
+    let list = """
+       Vendor   Product           Rev   Bus       SupportLevel
+    1  MATSHITA BD-MLT UJ260      1.00  USB       Unsupported
+    """
+    let rows = Parsers.drutilList(list)
+    #expect(rows.count == 1 && rows[0].0 == 1 && rows[0].1.contains("BD-MLT UJ260"))
+    let status = """
+               Type: BD-ROM               Name: /dev/disk6
+           Sessions: 1                  Tracks: 1
+    """
+    #expect(Parsers.drutilBSDName(status) == "disk6")
+}

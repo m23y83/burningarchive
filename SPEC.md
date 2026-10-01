@@ -1,7 +1,8 @@
 # BurningArchive — Spec
 
 Minimal native macOS app (SwiftUI) that burns files/folders to BD-R / BDXL discs
-as **multisession** data discs using cdrtools (`cdrecord` + `mkisofs`).
+as **multisession** data discs using cdrtools (`cdrecord` + `mkisofs`) and
+dvd+rw-tools (`growisofs`).
 
 ## Goals
 - Drag & drop files and folders into a window; burn them to disc.
@@ -15,13 +16,13 @@ Audio/video discs, erasing BD-RE, ISO image burning, UDF, disc copy, verify-afte
 
 ## Environment
 - macOS 14+, Apple Silicon or Intel.
-- cdrtools ≥ 3.x (`brew install cdrtools`). Looked up in `/opt/homebrew/bin`,
+- cdrtools ≥ 3.x and dvd+rw-tools 7.x (`brew install cdrtools dvd+rw-tools`). Looked up in `/opt/homebrew/bin`,
   `/usr/local/bin`, `/opt/schily/bin`, `/usr/bin`.
 - No root required (verified: `cdrecord dev=2,0,0 -minfo` works as user).
 
 ## Functional requirements
-1. **Tool check** — on launch locate `cdrecord` and `mkisofs`. Missing → banner with
-   `brew install cdrtools` hint; Burn disabled.
+1. **Tool check** — on launch locate `cdrecord`, `mkisofs` and `growisofs`. Missing → banner with
+   `brew install cdrtools dvd+rw-tools` hint; Burn disabled.
 2. **Drive discovery** — `cdrecord -scanbus`; parse lines
    `\t2,0,0\t200) 'VENDOR' 'MODEL' 'REV' Removable CD-ROM`. Show picker (vendor + model).
    Refresh button.
@@ -41,13 +42,25 @@ Audio/video discs, erasing BD-RE, ISO image burning, UDF, disc copy, verify-afte
    1. Unmount disc if mounted by macOS (`mount` → cd9660/udf device → `diskutil unmountDisk`).
    2. If disk status `incomplete`: `cdrecord dev=<d> -msinfo` → `a,b`.
    3. `mkisofs <opts> -quiet -print-size` → sectors N. Abort if N > remaining.
-   4. `mkisofs <opts> | cdrecord dev=<d> -v gracetime=2 fs=64m driveropts=burnfree -data tsize=Ns [-multi] [-eject] -`
+   4. Writer:
+      - Disc stays open (BD/DVD): `mkisofs <opts> | growisofs -use-the-force-luke=spare:none [-C a,b -M | -Z] /dev/rdiskN=/dev/fd/0`.
+        cdrecord can't be used here: its BD-R driver fixates with CLOSE SESSION function 6
+        (finalize disc) whatever `-multi` says, then ejects to reload the media.
+        growisofs closes only the session (function 2) and never reloads the tray on macOS.
+        `spare:none` stops it pre-formatting a blank BD-R (pseudo-overwrite).
+        BSD node: `drutil list` matched by vendor + model → `drutil -drive N status` → `Name: /dev/diskN`.
+        growisofs needs exclusive drive access, and mkisofs reads the previous session through
+        the drive. So growisofs starts only once mkisofs emits its first byte (mkisofs closes the
+        drive before writing output). The disc is unmounted again first, because macOS remounts it
+        whenever a tool releases the drive.
+        "Eject when done" → `diskutil eject diskN`.
+      - Close disc, or CD media: `mkisofs <opts> | cdrecord dev=<d> -v gracetime=2 fs=64m driveropts=burnfree -data tsize=Ns [-eject] -`
    5. Re-read media info, clear list on success.
    - mkisofs opts: `-R -J -joliet-long -iso-level 3 -V <label> -graft-points -m .DS_Store -m ._*`
      plus `-C a,b -dev <d>` when appending.
    - Graft names escape `\` and `=` with backslash.
 7. **Progress** — parse cdrecord `Track 01:  123 of 4567 MB written` (split on `\r`
-   and `\n`) → progress bar + phase text (preparing / writing / fixating / done).
+   and `\n`), or growisofs `<offset>/<total> ( x.x%)` (offset is absolute; minus session start) → progress bar + phase text (preparing / writing / fixating / done).
    Full raw log in collapsible pane.
 8. **Cancel** — terminates both processes. Warns that a cancelled BD-R session is
    likely lost space.

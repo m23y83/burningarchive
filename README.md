@@ -5,7 +5,8 @@
 A small native macOS app for archiving data to **Blu-ray Disc™ BD-R / BDXL™** discs in **multiple sessions**.
 Drag files and folders into the window and press Burn. Each burn adds a new session,
 and files from earlier sessions stay on the disc. It uses
-[cdrtools](https://cdrtools.sourceforge.net/private/cdrecord.html) (`cdrecord` + `mkisofs`) to do the actual writing.
+[cdrtools](https://cdrtools.sourceforge.net/private/cdrecord.html) (`cdrecord` + `mkisofs`) and
+[dvd+rw-tools](https://en.wikipedia.org/wiki/Dvd%2Brw-tools) (`growisofs`) to do the actual writing.
 
 ## Download
 
@@ -21,9 +22,9 @@ xattr -dr com.apple.quarantine "/Applications/BurningArchive.app"
 
 ## Requirements
 
-- cdrtools, which is **not** included:
+- cdrtools and dvd+rw-tools, which are **not** included:
   ```
-  brew install cdrtools
+  brew install cdrtools dvd+rw-tools
   ```
   The app looks for the programs in `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/schily/bin` and `/usr/bin`.
 - A Blu-ray writer. Tested with a MATSHITA BD-MLT UJ260 (USB) and 100 GB BDXL BD-R discs.
@@ -41,8 +42,11 @@ xattr -dr com.apple.quarantine "/Applications/BurningArchive.app"
 ```
 cdrecord dev=<drive> -msinfo                       # where the previous session ends (appendable discs only)
 mkisofs -R -J -joliet-long -iso-level 3 -C <msinfo> -dev <drive> -print-size …   # exact session size
-mkisofs … | cdrecord dev=<drive> -data -multi tsize=<N>s -
+mkisofs … | growisofs -use-the-force-luke=spare:none -C <msinfo> -M /dev/rdiskN=/dev/fd/0
 ```
+growisofs writes the session because cdrecord's BD-R driver always **finalizes** the disc
+(it ignores `-multi`) and ejects it afterwards. growisofs closes only the session, so the disc stays appendable.
+**Close disc** still uses cdrecord (`mkisofs … | cdrecord … -data tsize=<N>s -`), since finalizing is what it does.
 Details and known limits are in [SPEC.md](SPEC.md).
 
 ### Known limitations

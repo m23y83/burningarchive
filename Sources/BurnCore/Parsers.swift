@@ -89,6 +89,26 @@ public enum Parsers {
         return (Int64(g[1]) ?? 0, Int64(g[2]) ?? 0)
     }
 
+    /// growisofs progress: "  123731968/25025314816 ( 0.5%) @2.7x, remaining 16:23 ..."
+    /// Returns the absolute byte offset reached on the disc (includes earlier sessions).
+    public static func growisofsProgress(_ line: String) -> Int64? {
+        let re = try! NSRegularExpression(pattern: #"^\s*(\d+)/(\d+)\s*\(\s*[\d.]+%\)"#)
+        guard let g = matches(re, in: line).first else { return nil }
+        return Int64(g[1])
+    }
+
+    /// `drutil list` rows: "1  MATSHITA BD-MLT UJ260      1.00  USB  Unsupported" → (index, row text).
+    public static func drutilList(_ text: String) -> [(Int, String)] {
+        let re = try! NSRegularExpression(pattern: #"^\s*(\d+)\s+(.+)$"#, options: .anchorsMatchLines)
+        return matches(re, in: text).compactMap { g in Int(g[1]).map { ($0, g[2]) } }
+    }
+
+    /// BSD node from `drutil status`: "... Name: /dev/disk6" → "disk6".
+    public static func drutilBSDName(_ text: String) -> String? {
+        let re = try! NSRegularExpression(pattern: #"Name:\s*/dev/(disk\d+)"#)
+        return matches(re, in: text).first?[1]
+    }
+
     /// Mounted optical volumes from `mount` output: returns BSD whole-disk nodes, e.g. "/dev/disk6".
     public static func opticalMounts(_ text: String) -> [String] {
         let re = try! NSRegularExpression(

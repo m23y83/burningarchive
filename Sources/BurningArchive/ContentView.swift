@@ -42,7 +42,7 @@ struct ContentView: View {
     private var toolsBanner: some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-            Text("cdrtools not found. Install with  `brew install cdrtools`  then relaunch.")
+            Text("Burning tools not found. Install with  `brew install cdrtools dvd+rw-tools`  then relaunch.")
             Spacer()
         }
         .padding(10)

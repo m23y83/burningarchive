@@ -47,6 +47,24 @@ public enum Commands {
         return a
     }
 
+    /// growisofs writes BD/DVD sessions. Unlike cdrecord's BD-R driver, which always finalizes
+    /// the disc (CLOSE SESSION function 6), growisofs only closes the session, so the disc stays
+    /// appendable. The image comes in on stdin; `msinfo` must match what growisofs reads from
+    /// the drive or it aborts before writing. `spare:none` keeps a blank BD-R unformatted
+    /// (sequential, true multisession) instead of pre-formatting it for pseudo-overwrite.
+    public static func growisofsArgs(device: String, msinfo: String?) -> [String] {
+        var a = ["-use-the-force-luke=spare:none"]
+        if let msinfo { a += ["-C", msinfo, "-M"] } else { a.append("-Z") }
+        a.append("\(device)=/dev/fd/0")
+        return a
+    }
+
+    /// Writer for this burn. growisofs has no CD support, and closing a disc is left to
+    /// cdrecord, whose finalization is exactly what closing should do.
+    public static func usesGrowisofs(mediaType: String, closeDisc: Bool) -> Bool {
+        !closeDisc && !mediaType.uppercased().hasPrefix("CD")
+    }
+
     public static func cdrecordBurnArgs(dev: String, sectors: Int64, options: BurnOptions) -> [String] {
         var a = ["dev=\(dev)", "-v", "gracetime=2", "fs=64m", "driveropts=burnfree", "-data",
                  "tsize=\(sectors)s"]

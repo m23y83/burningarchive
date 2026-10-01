@@ -28,6 +28,7 @@ enum BurnPhase: Equatable {
 final class BurnModel: ObservableObject {
     @Published var cdrecordPath = Tools.locate("cdrecord")
     @Published var mkisofsPath = Tools.locate("mkisofs")
+    @Published var growisofsPath = Tools.locate("growisofs")
     @Published var drives: [Drive] = []
     @Published var selectedDev: String? = nil
     @Published var media: MediaState = .unknown
@@ -44,8 +45,11 @@ final class BurnModel: ObservableObject {
 
     private var running: [Process] = []
     private var cancelRequested = false
+    // growisofs reports absolute disc offsets; progress is measured from where this session starts.
+    private var sessionStartBytes: Int64 = 0
+    private var sessionBytes: Int64 = 1
 
-    var toolsMissing: Bool { cdrecordPath == nil || mkisofsPath == nil }
+    var toolsMissing: Bool { cdrecordPath == nil || mkisofsPath == nil || growisofsPath == nil }
     var totalSize: Int64 { items.compactMap(\.size).reduce(0, +) }
     var sizesPending: Bool { items.contains { $0.size == nil } }
     var hasHugeFiles: Bool { items.contains(where: \.hasHugeFile) }
@@ -144,6 +148,29 @@ final class BurnModel: ObservableObject {
         }
     }
 
+    /// BSD name ("disk6") of the selected burner's disc, matched via drutil by vendor and model.
+    private func opticalBSDName() async throws -> String {
+        let drive = drives.first { $0.dev == selectedDev }
+        let list = try await runProcess("/usr/bin/drutil", ["list"])
+        let rows = Parsers.drutilList(list.stdout)
+        let index = rows.first { row in
+            drive.map { row.1.contains($0.vendor) && row.1.contains($0.model) } ?? false
+        }?.0 ?? rows.first?.0 ?? 1
+        // After cdrecord releases the drive, macOS takes a few seconds to re-probe the disc and
+        // reports "No Media Inserted" until then, so poll until the node reappears.
+        let deadline = Date().addingTimeInterval(30)
+        while true {
+            let st = try await runProcess("/usr/bin/drutil", ["-drive", "\(index)", "status"])
+            if let name = Parsers.drutilBSDName(st.stdout) { return name }
+            if cancelRequested { throw CancelError() }
+            guard Date() < deadline else {
+                throw BurnError("macOS shows no device node for the disc in drive \(index):\n\(st.combined.suffix(400))")
+            }
+            progressText = "Waiting for macOS to detect the disc…"
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+
     // MARK: - Compilation
 
     func add(urls: [URL]) {
@@ -201,7 +228,8 @@ final class BurnModel: ObservableObject {
     // MARK: - Burn
 
     func burn() async {
-        guard let cdrecord = cdrecordPath, let mkisofs = mkisofsPath, let dev = selectedDev else { return }
+        guard let cdrecord = cdrecordPath, let mkisofs = mkisofsPath, let growisofs = growisofsPath,
+              let dev = selectedDev else { return }
         busy = true
         cancelRequested = false
         phase = .preparing
@@ -219,8 +247,10 @@ final class BurnModel: ObservableObject {
             media = .ready(info)
             guard info.isAppendable else { throw BurnError("Disc is closed; no more sessions can be added.") }
 
+            // macOS remounts the disc whenever a tool releases the drive, so unmount before each step.
             var msinfo: String? = nil
             if info.diskStatus == .incomplete {
+                try await unmountOptical()
                 appendLog("$ cdrecord dev=\(dev) -msinfo")
                 let r = try await runProcess(cdrecord, ["dev=\(dev)", "-msinfo"])
                 guard let ms = Parsers.msinfo(r.stdout) else { throw BurnError("cdrecord -msinfo failed:\n\(r.combined)") }
@@ -229,6 +259,7 @@ final class BurnModel: ObservableObject {
             }
 
             let urls = items.map(\.url)
+            try await unmountOptical()
             let sizeArgs = Commands.mkisofsArgs(items: urls, label: volumeLabel, msinfo: msinfo,
                                                 dev: msinfo == nil ? nil : dev, printSize: true)
             appendLog("$ mkisofs " + sizeArgs.joined(separator: " "))
@@ -244,15 +275,40 @@ final class BurnModel: ObservableObject {
 
             let mkArgs = Commands.mkisofsArgs(items: urls, label: volumeLabel, msinfo: msinfo,
                                               dev: msinfo == nil ? nil : dev, printSize: false)
-            let options = BurnOptions(volumeLabel: volumeLabel, closeDisc: closeDisc, eject: ejectWhenDone)
-            let cdArgs = Commands.cdrecordBurnArgs(dev: dev, sectors: sectors, options: options)
-            appendLog("$ mkisofs " + mkArgs.joined(separator: " ") + " | cdrecord " + cdArgs.joined(separator: " "))
+            let viaGrowisofs = Commands.usesGrowisofs(mediaType: info.mediaType, closeDisc: closeDisc)
+            var bsdName: String? = nil
+            let writer: String, writerPath: String, writerArgs: [String]
+            if viaGrowisofs {
+                let name = try await opticalBSDName()
+                bsdName = name
+                writer = "growisofs"
+                writerPath = growisofs
+                // Raw node: growisofs then drives the burner over IOKit SCSI and needs no write permission on it.
+                writerArgs = Commands.growisofsArgs(device: "/dev/r\(name)", msinfo: msinfo)
+            } else {
+                writer = "cdrecord"
+                writerPath = cdrecord
+                let options = BurnOptions(volumeLabel: volumeLabel, closeDisc: closeDisc, eject: ejectWhenDone)
+                writerArgs = Commands.cdrecordBurnArgs(dev: dev, sectors: sectors, options: options)
+            }
+            appendLog("$ mkisofs " + mkArgs.joined(separator: " ") + " | \(writer) " + writerArgs.joined(separator: " "))
 
+            sessionBytes = max(1, sectors * 2048)
+            lastLoggedStep = -1
+            sessionStartBytes = (msinfo.flatMap { $0.split(separator: ",").last }.flatMap { Int64($0) } ?? 0) * 2048
             let totalMB = max(1, sectors * 2048 / 1_000_000)
-            let (mkStatus, cdStatus) = try await runPipeline(mkisofs, mkArgs, cdrecord, cdArgs, totalMB: totalMB)
+            try await unmountOptical()
+            let (mkStatus, wrStatus) = try await runPipeline(mkisofs, mkArgs, writerPath, writerArgs,
+                                                             totalMB: totalMB, waitForImage: viaGrowisofs)
             if cancelRequested { throw CancelError() }
-            guard cdStatus == 0 else { throw BurnError("cdrecord exited with status \(cdStatus). See log.") }
+            guard wrStatus == 0 else { throw BurnError("\(writer) exited with status \(wrStatus). See log.") }
             guard mkStatus == 0 else { throw BurnError("mkisofs exited with status \(mkStatus). See log.") }
+
+            if viaGrowisofs, ejectWhenDone, let bsdName {
+                appendLog("$ diskutil eject \(bsdName)")
+                let r = try await runProcess("/usr/sbin/diskutil", ["eject", bsdName])
+                appendLog(r.combined.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
 
             phase = .done
             progress = 1
@@ -271,6 +327,7 @@ final class BurnModel: ObservableObject {
 
         // Give the drive a moment to settle before asking it for the new TOC.
         try? await Task.sleep(for: .seconds(3))
+        try? await unmountOptical()
         await readMedia()
     }
 
@@ -280,62 +337,91 @@ final class BurnModel: ObservableObject {
         appendLog("Cancel requested.")
     }
 
-    /// mkisofs stdout → cdrecord stdin; both stderr streams go to the log.
-    private func runPipeline(_ mkPath: String, _ mkArgs: [String], _ cdPath: String, _ cdArgs: [String],
-                             totalMB: Int64) async throws -> (Int32, Int32) {
-        let mk = Process(), cd = Process()
+    /// mkisofs stdout → writer stdin; both stderr streams go to the log.
+    /// `waitForImage`: start the writer only once mkisofs emits data. When appending, mkisofs first
+    /// reads the previous session through the drive; growisofs needs the drive exclusively, and
+    /// mkisofs releases it before it writes any output.
+    private func runPipeline(_ mkPath: String, _ mkArgs: [String], _ wrPath: String, _ wrArgs: [String],
+                             totalMB: Int64, waitForImage: Bool) async throws -> (Int32, Int32) {
+        let mk = Process(), wr = Process()
         mk.executableURL = URL(fileURLWithPath: mkPath)
         mk.arguments = mkArgs
-        cd.executableURL = URL(fileURLWithPath: cdPath)
-        cd.arguments = cdArgs
+        wr.executableURL = URL(fileURLWithPath: wrPath)
+        wr.arguments = wrArgs
+        let writer = wr.executableURL!.lastPathComponent
 
-        let data = Pipe(), mkErr = Pipe(), cdOut = Pipe()
+        let data = Pipe(), mkErr = Pipe(), wrOut = Pipe()
         mk.standardInput = FileHandle.nullDevice
         mk.standardOutput = data
         mk.standardError = mkErr
-        cd.standardInput = data
-        cd.standardOutput = cdOut
-        cd.standardError = cdOut
+        wr.standardInput = data
+        wr.standardOutput = wrOut
+        wr.standardError = wrOut
 
         let mkLines = LineSplitter { line in Task { @MainActor in self.handle(line: line, from: "mkisofs", totalMB: totalMB) } }
-        let cdLines = LineSplitter { line in Task { @MainActor in self.handle(line: line, from: "cdrecord", totalMB: totalMB) } }
+        let wrLines = LineSplitter { line in Task { @MainActor in self.handle(line: line, from: writer, totalMB: totalMB) } }
         mkErr.fileHandleForReading.readabilityHandler = { h in mkLines.feed(h.availableData) }
-        cdOut.fileHandleForReading.readabilityHandler = { h in cdLines.feed(h.availableData) }
-
-        let result: (Int32, Int32) = try await withCheckedThrowingContinuation { cont in
-            let group = DispatchGroup()
-            let status = StatusBox()
-            group.enter(); group.enter()
-            mk.terminationHandler = { status.mk = $0.terminationStatus; group.leave() }
-            cd.terminationHandler = { status.cd = $0.terminationStatus; group.leave() }
-            do {
-                try cd.run()
-            } catch {
-                cont.resume(throwing: error); return
-            }
-            do {
-                try mk.run()
-            } catch {
-                cd.terminate()
-                group.leave()   // mk never ran
-                group.notify(queue: .global()) { cont.resume(throwing: error) }
-                return
-            }
-            group.notify(queue: .global()) { cont.resume(returning: (status.mk, status.cd)) }
-            running = [mk, cd]
-            phase = .writing
-            progressText = "Writing…"
+        wrOut.fileHandleForReading.readabilityHandler = { h in wrLines.feed(h.availableData) }
+        defer {
+            mkErr.fileHandleForReading.readabilityHandler = nil
+            wrOut.fileHandleForReading.readabilityHandler = nil
         }
 
-        mkErr.fileHandleForReading.readabilityHandler = nil
-        cdOut.fileHandleForReading.readabilityHandler = nil
+        let group = DispatchGroup()
+        let status = StatusBox()
+        group.enter()
+        mk.terminationHandler = { status.mk = $0.terminationStatus; group.leave() }
+        wr.terminationHandler = { status.cd = $0.terminationStatus; group.leave() }
+        let finished = { await withCheckedContinuation { c in group.notify(queue: .global()) { c.resume() } } }
+
+        if !waitForImage {
+            group.enter()
+            do { try wr.run() } catch { group.leave(); throw error }
+        }
+        do {
+            try mk.run()
+        } catch {
+            if wr.isRunning { wr.terminate() }
+            group.leave()   // mk never ran
+            await finished()
+            throw error
+        }
+        running = waitForImage ? [mk] : [mk, wr]
+
+        if waitForImage {
+            progressText = "Reading previous session…"
+            let fd = data.fileHandleForReading.fileDescriptor
+            let ready = await Task.detached { waitReadable(fd) }.value
+            var startError: Error? = nil
+            if cancelRequested { startError = CancelError() }
+            else if !ready { startError = BurnError("mkisofs stopped before producing the image. See log.") }
+            else {
+                do {
+                    try await unmountOptical()
+                    group.enter()
+                    do { try wr.run() } catch { group.leave(); throw error }
+                } catch { startError = error }
+            }
+            if let startError {
+                if mk.isRunning { mk.terminate() }
+                await finished()
+                mkLines.feed(mkErr.fileHandleForReading.readDataToEndOfFile()); mkLines.flush()
+                throw startError
+            }
+            running = [mk, wr]
+        }
+        phase = .writing
+        progressText = "Writing…"
+
+        await finished()
         mkLines.feed(mkErr.fileHandleForReading.readDataToEndOfFile()); mkLines.flush()
-        cdLines.feed(cdOut.fileHandleForReading.readDataToEndOfFile()); cdLines.flush()
+        wrLines.feed(wrOut.fileHandleForReading.readDataToEndOfFile()); wrLines.flush()
         try? await Task.sleep(for: .milliseconds(100))   // let queued log lines land
-        return result
+        return (status.mk, status.cd)
     }
 
     private var lastProgressLine = ""
+    private var lastLoggedStep = -1
 
     private func handle(line: String, from tool: String, totalMB: Int64) {
         if let (done, total) = Parsers.progress(line) {
@@ -347,10 +433,21 @@ final class BurnModel: ObservableObject {
             lastProgressLine = line
             return
         }
+        if tool == "growisofs", let offset = Parsers.growisofsProgress(line) {
+            let done = max(0, offset - sessionStartBytes)
+            progress = min(1, Double(done) / Double(sessionBytes))
+            progressText = "Writing \(done / 1_000_000) of \(sessionBytes / 1_000_000) MB"
+            // Log every 5% rather than every tick.
+            let step = Int(progress * 20)
+            if step != lastLoggedStep { appendLog(line); lastLoggedStep = step }
+            return
+        }
         if tool == "mkisofs", line.contains("% done") { return }
-        if line.localizedCaseInsensitiveContains("fixating") {
+        // cdrecord: "Fixating..."; growisofs: "flushing cache", "closing track", "closing session".
+        if ["fixating", "flushing cache", "closing track", "closing session"].contains(where: {
+            line.localizedCaseInsensitiveContains($0) }) {
             phase = .fixating
-            progressText = "Fixating (closing session)… do not eject."
+            progressText = closeDisc ? "Closing disc… do not eject." : "Closing session… do not eject."
         }
         appendLog(line)
     }
@@ -363,6 +460,16 @@ struct BurnError: LocalizedError {
 }
 
 struct CancelError: Error {}
+
+/// Blocks until the pipe has data (true) or its writer has gone without writing any (false).
+private func waitReadable(_ fd: Int32) -> Bool {
+    var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+    while true {
+        let n = poll(&p, 1, -1)
+        if n < 0 && errno == EINTR { continue }
+        return n > 0 && p.revents & Int16(POLLIN) != 0
+    }
+}
 
 private final class StatusBox: @unchecked Sendable {
     var mk: Int32 = -1
