@@ -1,22 +1,22 @@
-<p align="center"><img src="Resources/AppIcon.png" width="160" alt="BluRay Burner icon"></p>
+<p align="center"><img src="Resources/AppIcon.png" width="160" alt="BurningArchive icon"></p>
 
-# BluRay Burner
+# BurningArchive
 
-A small native macOS app for burning data to **BD-R / BDXL** discs in **multiple sessions**.
+A small native macOS app for archiving data to **Blu-ray Disc™ BD-R / BDXL™** discs in **multiple sessions**.
 Drag files and folders into the window and press Burn. Each burn adds a new session,
 and files from earlier sessions stay on the disc. It uses
 [cdrtools](https://cdrtools.sourceforge.net/private/cdrecord.html) (`cdrecord` + `mkisofs`) to do the actual writing.
 
 ## Download
 
-Get `BluRayBurner-<version>.zip` from [Releases](../../releases), unzip it, and move
-**BluRayBurner.app** to `/Applications`. It is a universal build (Apple Silicon and Intel) and needs macOS 14 or later.
+Get `BurningArchive-<version>.zip` from [Releases](../../releases), unzip it, and move
+**BurningArchive.app** to `/Applications`. It is a universal build (Apple Silicon and Intel) and needs macOS 14 or later.
 
 The app is ad-hoc signed, **not notarized**, so macOS will block it the first time:
 right-click the app → **Open** → **Open**. If macOS still says the app "is damaged" (it adds a
 quarantine flag to downloaded files), run:
 ```
-xattr -dr com.apple.quarantine "/Applications/BluRayBurner.app"
+xattr -dr com.apple.quarantine "/Applications/BurningArchive.app"
 ```
 
 ## Requirements
@@ -55,7 +55,7 @@ Details and known limits are in [SPEC.md](SPEC.md).
 
 Command Line Tools are enough; Xcode is not needed.
 ```
-./build.sh     # -> build/BluRayBurner.app (universal; icon drawn by scripts/make-icon.swift)
+./build.sh     # -> build/BurningArchive.app (universal; icon drawn by scripts/make-icon.swift)
 ./test.sh      # parser + two-session merge tests (the merge test needs cdrtools installed)
 ```
 
@@ -66,4 +66,7 @@ cdrtools is **not** bundled; the app runs the copy you installed. See [CREDITS.m
 
 ## License
 
-MIT, see [LICENSE](LICENSE). This covers only BluRay Burner's own code.
+MIT, see [LICENSE](LICENSE). This covers only BurningArchive's own code.
+
+Blu-ray Disc™ and BDXL™ are trademarks of the Blu-ray Disc Association. BurningArchive is not
+affiliated with or endorsed by the Blu-ray Disc Association.

@@ -1,11 +1,11 @@
 import SwiftUI
 
 @main
-struct BluRayBurnerApp: App {
+struct BurningArchiveApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("BluRay Burner", id: "main") {
+        Window("BurningArchive", id: "main") {
             ContentView()
         }
         .windowResizability(.contentMinSize)

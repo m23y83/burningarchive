@@ -1,4 +1,4 @@
-# BluRay Burner — Spec
+# BurningArchive — Spec
 
 Minimal native macOS app (SwiftUI) that burns files/folders to BD-R / BDXL discs
 as **multisession** data discs using cdrtools (`cdrecord` + `mkisofs`).
@@ -62,16 +62,16 @@ Audio/video discs, erasing BD-RE, ISO image burning, UDF, disc copy, verify-afte
 
 ## Architecture
 SwiftPM executable (no Xcode project needed; builds with Command Line Tools),
-wrapped into `BluRayBurner.app` by `build.sh` (Info.plist + ad-hoc codesign).
+wrapped into `BurningArchive.app` by `build.sh` (Info.plist + ad-hoc codesign).
 Not sandboxed (must exec Homebrew binaries and talk to the drive).
 
 | File | Role |
 |---|---|
-| `Package.swift` | SwiftPM manifest: `BurnCore` library + `BluRayBurner` executable + tests |
+| `Package.swift` | SwiftPM manifest: `BurnCore` library + `BurningArchive` executable + tests |
 | `BurnCore/Tools.swift` | tool lookup, async process runner |
 | `BurnCore/Parsers.swift` | scanbus / minfo / msinfo / progress parsers, graft escaping |
 | `BurnCore/Commands.swift` | builds mkisofs / cdrecord argument lists |
-| `BluRayBurner/BurnModel.swift` | `@MainActor ObservableObject`, orchestration, pipeline |
-| `BluRayBurner/ContentView.swift` | UI |
-| `BluRayBurner/App.swift` | `@main` |
+| `BurningArchive/BurnModel.swift` | `@MainActor ObservableObject`, orchestration, pipeline |
+| `BurningArchive/ContentView.swift` | UI |
+| `BurningArchive/App.swift` | `@main` |
 | `Tests/BurnCoreTests` | parser + command-builder tests using real captured output |

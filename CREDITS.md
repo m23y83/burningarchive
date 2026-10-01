@@ -1,6 +1,6 @@
 # Credits & Third-Party Notices
 
-BluRay Burner is a small graphical front end. Everything that actually talks to
+BurningArchive is a small graphical front end. Everything that actually talks to
 the drive and builds the disc filesystem is done by **cdrtools**, which the app
 runs as separate command-line programs.
 
@@ -29,7 +29,7 @@ Licenses (as published by the cdrtools project):
 or binaries, and the app does not link against any cdrtools library. It starts the
 `cdrecord` and `mkisofs` programs that the user installed separately, usually with
 Homebrew (`brew install cdrtools`). The cdrtools licenses therefore cover those
-programs, not this app. BluRay Burner's own code is MIT-licensed (see `LICENSE`).
+programs, not this app. BurningArchive's own code is MIT-licensed (see `LICENSE`).
 
 ## Homebrew
 
